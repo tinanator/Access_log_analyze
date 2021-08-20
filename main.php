@@ -1,28 +1,32 @@
 <?php
 
 class StatusEnumTypes {
+    const START = 0;
     const SEARCHING_FOR_INTERVAL = 1;
     const FOUND_START_INTERVAL = 2;
 }
 
 class BufferChecker {
 
-    private CycleBuffer $buffer;
+    private string $time;
 
     private int $min_access;
 
     private String $start_interval= '';
 
-    private String $end_interval = '';
+    private String $store_end_interval = '';
+
+    private String $found_interval_end = '';
 
     private int $refuses_in_interval = 0;
 
     private int $logs_in_interval;
 
-    private int $status = StatusEnumTypes::SEARCHING_FOR_INTERVAL;
+    private float $access_percent = 0;
 
-    public function __construct($buffer_max_size, $min_access) {
-        $this->buffer = new CycleBuffer($buffer_max_size);
+    private int $status = StatusEnumTypes::START;
+
+    public function __construct($min_access) {
         $this->min_access = $min_access;
     }
 
@@ -31,103 +35,73 @@ class BufferChecker {
         return $this->status;
     }
 
-    public function write_log_and_check(LogData $log) {
-        $this->buffer->write_log($log);
-        $this->check_buffer();
+    private function reset_values($log) {
+        $this->time = $log->time;
+        $this->start_interval = $log->time;
+        $this->store_end_interval = $log->time;
+        $this->refuses_in_interval = 0;
+        $this->logs_in_interval = 1;
+        if ($log->refused) {
+            $this->refuses_in_interval = 1;
+        }
     }
 
-    private function check_buffer() {
-        if (100 - $this->buffer->get_refuses_percent() < $this->min_access) {
-            if ($this->status === StatusEnumTypes::SEARCHING_FOR_INTERVAL) {
-                $this->start_interval = $this->buffer->get_time();
-                $this->status = StatusEnumTypes::FOUND_START_INTERVAL;
-                $this->end_interval = $this->start_interval;
-                $this->refuses_in_interval = 0;
-                $this->logs_in_interval = 1;
-                if ($this->buffer->is_refused()) {
-                    $this->refuses_in_interval++;
-                }
+    private function increase_values($log) {
+        $this->store_end_interval = $log->time;
+        $this->logs_in_interval++;
+        if ($log->refused) {
+            $this->refuses_in_interval++;
+        }
+    }
+
+    public function check_interval(LogData $log) {
+        if ($this->status == StatusEnumTypes::START) { //start of a program
+            $this->status = StatusEnumTypes::SEARCHING_FOR_INTERVAL;
+            $this->reset_values($log);
+        }
+        else if ($this->status == StatusEnumTypes::SEARCHING_FOR_INTERVAL) { //if the same second
+            if ($this->time == $log->time) {
+                $this->increase_values($log);
             }
-            else if ($this->status === StatusEnumTypes::FOUND_START_INTERVAL) {
-                $this->end_interval = $this->buffer->get_time();
-                if ($this->buffer->is_refused()) {
-                    $this->refuses_in_interval++;
+            else {
+                $access = 100 - $this->refuses_in_interval / $this->logs_in_interval * 100;
+                $this->time = $log->time;
+                if ($access < $this->min_access) {
+                    $this->status = StatusEnumTypes::FOUND_START_INTERVAL;
+                    $this->found_interval_end = $this->store_end_interval;
+                    $this->increase_values($log);
+                    $this->access_percent = $access;
                 }
-                $this->logs_in_interval++;
+                else {
+                    $this->reset_values($log);
+                }
             }
         }
-        else if ($this->status === StatusEnumTypes::FOUND_START_INTERVAL) {
-            $this->status = StatusEnumTypes::SEARCHING_FOR_INTERVAL;
-            if ($this->buffer->is_refused()) {
-                $this->refuses_in_interval++;
+        else if ($this->status == StatusEnumTypes::FOUND_START_INTERVAL) {
+            if ($this->time == $log->time) {
+                $this->increase_values($log);
             }
-            $this->logs_in_interval++;
-            $this->print_interval();
+            else {
+                $access = 100 - $this->refuses_in_interval / $this->logs_in_interval * 100;
+                $this->time = $log->time;
+                if ($access < $this->min_access) {
+                    $this->found_interval_end = $this->store_end_interval;
+                    $this->increase_values($log);
+                    $this->access_percent = $access;
+                }
+                else {
+                    $this->print_interval();
+                    $this->status = StatusEnumTypes::SEARCHING_FOR_INTERVAL;
+                    $this->reset_values($log);
+                }
+            }
         }
     }
 
     public function print_interval() {
-        $access_percent = 100 - $this->refuses_in_interval / $this->logs_in_interval * 100;
-        $this->end_interval = $this->buffer->get_time();
-        echo $this->start_interval . ' ' . $this->end_interval . ' ' . $access_percent . "\n";
+        echo $this->start_interval . ' ' . $this->found_interval_end . ' ' . $this->access_percent . "\n";
     }
 
-}
-class CycleBuffer {
-    public function __construct($size) {
-        $this->max_size = $size;
-    }
-
-    private array $buffer = [];
-
-    private int $max_size;
-
-    private int $index = 0;
-
-    private int $pointer = 0;
-
-    private float $refuses_percent = 0;
-
-    private int $refuses = 0;
-
-    public function write_log(LogData $log_data) {
-        if (count($this->buffer) < $this->max_size) {
-            $this->buffer[] = $log_data;
-            $this->index++;
-        }
-        else {
-            if ($this->buffer[$this->index % $this->max_size]->refused) {
-                $this->refuses--;
-            }
-            $this->buffer[$this->index % $this->max_size] = $log_data;
-            $this->index = ($this->index + 1) % $this->max_size;
-            $this->pointer = ($this->pointer + 1) % $this->max_size;
-        }
-        if ($log_data->refused) {
-            $this->refuses++;
-        }
-        $this->refuses_percent = $this->refuses / $this->max_size * 100;
-    }
-
-    public function is_refused() : bool {
-
-        return $this->buffer[$this->pointer]->refused;
-    }
-
-    public function get_time() : string {
-
-        return $this->buffer[$this->pointer]->time;
-    }
-
-    public function get_buffer(): array {
-
-        return $this->buffer;
-    }
-
-    public function get_refuses_percent() : float {
-
-        return $this->refuses_percent;
-    }
 }
 
 class LogData {
@@ -153,7 +127,7 @@ function parse(string $log, float $response_time) : LogData {
 }
 
 function main($stream, $options) {
-    $bufferChecker = new BufferChecker(5, $options['u']);
+    $bufferChecker = new BufferChecker($options['u']);
     $log_file = fopen($stream, 'r', 'r');
     while(true) {
         $log = fgets($log_file);
@@ -164,7 +138,7 @@ function main($stream, $options) {
             break;
         }
         $log_data = parse($log, $options['t']);
-        $bufferChecker->write_log_and_check($log_data);
+        $bufferChecker->check_interval($log_data);
     }
 }
 

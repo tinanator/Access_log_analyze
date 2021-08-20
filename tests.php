@@ -26,54 +26,31 @@ class Test extends TestCase
         $this->assertSame(true, $log_data->refused);
     }
 
-    public function testCycleBuffer() {
-        $test_array = [];
-        $index = 0;
-        $max_size = 50;
-        $buffer = new CycleBuffer($max_size);
-        $test_refuses_count = 0;
-        for ($i = 0; $i < 1000; $i++) {
-            $log_data = new LogData('1', rand(0, 1) == 0);
-            $test_array[] = $log_data;
-            $buffer->write_log($log_data);
-            if (count($buffer->get_buffer()) < $max_size) {
-                $this->assertCount($i + 1, $buffer->get_buffer());
-            }
-            else {
-                $this->assertCount($max_size, $buffer->get_buffer());
-            }
-            if ($index - $max_size >= 0 && $test_array[$index - $max_size]->refused) {
-                $test_refuses_count--;
-            }
-            if ($test_array[$index]->refused) {
-                $test_refuses_count++;
-            }
-            $test_percent = (float)$test_refuses_count / $max_size * 100;
-            $this->assertSame($test_percent, $buffer->get_refuses_percent());
-            $index++;
-        }
-    }
-
-    private function write_logs($count, $is_refused, $cur_time, &$bufferChecker) : int{
+    private function write_logs($count, $is_refused, $cur_time, &$bufferChecker) : void {
         for ($i = 0; $i < $count; $i++) {
-            $cur_time++;
-            $bufferChecker->write_log_and_check(new LogData((string)$cur_time, $is_refused));
+            $bufferChecker->check_interval(new LogData((string)$cur_time, $is_refused));
         }
-
-        return $cur_time;
     }
 
     public function testCheckBuffer() {
-        $this->expectOutputString("2 10 22.222222222222\n16 21 33.333333333333\n");
-
+        $this->expectOutputString("1 1 33.333333333333\n3 4 40\n");
         $min_access = 50;
-        $bufferChecker = new BufferChecker(5, $min_access);
-        $cur_time = 0;
-        $cur_time = $this->write_logs(3, false, $cur_time, $bufferChecker);
-        $cur_time = $this->write_logs(2, true, $cur_time, $bufferChecker);
-        $cur_time = $this->write_logs(6, true, $cur_time, $bufferChecker);
-        $cur_time = $this->write_logs(6, false, $cur_time, $bufferChecker);
-        $cur_time = $this->write_logs(5, true, $cur_time, $bufferChecker);
+
+        $bufferChecker = new BufferChecker($min_access);
+        $cur_time = 1;
+        $this->write_logs(2, true, $cur_time, $bufferChecker);
+        $this->write_logs(1, false, $cur_time, $bufferChecker);
+        $cur_time++;//2
+        $this->write_logs(2, false, $cur_time, $bufferChecker);
+        $cur_time++;//3
+        $this->write_logs(1, false, $cur_time, $bufferChecker);
+        $this->write_logs(2, true, $cur_time, $bufferChecker);
+        $cur_time++;//4
+        $this->write_logs(1, true, $cur_time, $bufferChecker);
+        $this->write_logs(1, false, $cur_time, $bufferChecker);
+        $cur_time++;//5
         $this->write_logs(5, false, $cur_time, $bufferChecker);
+        $cur_time++;//6
+        $this->write_logs(1, false, $cur_time, $bufferChecker);
     }
 }
